@@ -26,24 +26,72 @@ std::vector<std::vector<int>> edge_list;
 
 void build_adj_matrix()
 {
-    
+    adj.assign(total_nodes, vector<int>(total_nodes,0)); 
+
+    for (auto &e : edge_list)
+    {
+        int u = e[0];
+        int v = e[1];
+
+        adj[u][v] = 1;
+    }
 }
 
 double calculate_fraction_of_ones()
 {
-   
+   int count = 0;
+
+   for(int i = 0; i<total_nodes; i++)
+   {
+        if(opinions[i] == 1)
+            count++;
+   }
+
+   return (double)count / total_nodes;
 }
 
 // For a given node, count majority opinion among its neighbours. Tie -> 0.
 int get_majority_friend_opinions(int node)
 {
+    int zero_count = 0;
+    int one_count = 0;
+    for(int j = 0; j<total_nodes; j++)
+    {
+        if(adj[j][node] == 1)
+        {
+            if(opinions[j] == 0)
+                zero_count++;
+            else
+                one_count++;
+        }
+    }
+    
+    if(one_count>zero_count)
+        return 1;
 
+    return 0;
 }
 
 // Calculate new opinions for all voters and return if anyone's opinion changed
 bool update_opinions()
 {
+    bool changed = false;
 
+    vector<int> new_opinions = opinions;
+
+    for(int i = 0; i<total_nodes; i++)
+    {
+        int majority = get_majority_friend_opinions(i);
+
+        if(majority != opinions[i])
+            changed = true;
+
+            new_opinions[i] = majority;
+    }
+
+    opinions = new_opinions;
+
+    return changed;
 }
 
 int main() {
@@ -68,7 +116,11 @@ int main() {
          << calculate_fraction_of_ones() << endl;
     
     /// (6)  //////////////////////////////////////////////
-    
+    while(iteration < max_iterations && update_opinions())
+    {
+        iteration++;
+        cout<< "Iteration " << iteration << ": fraction of 1's = " << calculate_fraction_of_ones() << endl;
+    }
 
     ////////////////////////////////////////////////////////
     // Print final result
