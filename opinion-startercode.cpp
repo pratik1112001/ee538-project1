@@ -1,172 +1,230 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <algorithm>
 using namespace std;
 
 /********************DO NOT EDIT**********************/
-// Function prototype. Defined later.
-void read_opinions(string filename); // reads file into opinions vector and updates total_nodes as needed
-void read_edges(string filename); // reads file into edge_list, defined later
-void build_adj_matrix(); // convert edge_list to adjacency matrix
+// Function prototypes
+void read_opinions(string filename); // Reads node opinions and updates total_nodes
+void read_edges(string filename);    // Reads edge list and updates total_nodes
+void build_adj_matrix();             // Builds CSR (Compressed Sparse Row) structure
 
-int total_nodes = 0; // We keep track of the total number of nodes based on largest node id.
+int total_nodes = 0; // Total number of nodes (based on max node ID)
 
 
 /****************************************************************/
 
-/******** Create adjacency matrix and vector of opinions */
-// simple vector to hold each node's opinion (0 or 1)
+
+// Stores opinion of each node (0 or 1)
 std::vector<int> opinions;
 
-// global adjacency matrix initialized later
+// (Unused now) adjacency matrix placeholder from earlier version
 std::vector<std::vector<int>> adj;
 
-// edge list: each row contains {source, target}
+// Edge list: each entry = {source, destination}
 std::vector<std::vector<int>> edge_list;
 
+
+// CSR (Compressed Sparse Row) representation
+// More memory-efficient than adjacency matrix: O(N + E)
+// Optimized for fast neighbor traversal
+
+std::vector<int> col;       // Stores source nodes (in-neighbors)
+std::vector<int> row_ptr;   // Index pointers to col (size = N+1)
+
+
+// Build CSR structure from edge_list
+// Note: Function name retained for compatibility
 void build_adj_matrix()
 {
-    adj.assign(total_nodes, vector<int>(total_nodes,0)); 
-
-    for (auto &e : edge_list)
+    // Step 1: Compute in-degree for each node
+    vector<int> in_degree(total_nodes, 0);
+    for (int i = 0; i < (int)edge_list.size(); i++)
     {
-        int u = e[0];
-        int v = e[1];
-
-        adj[u][v] = 1;
+        int t = edge_list[i][1];   // destination node
+        in_degree[t]++;
     }
+
+    // Step 2: Build prefix sum array (row_ptr)
+    // row_ptr[i] gives starting index of node i's neighbors in col[]
+    row_ptr.resize(total_nodes + 1, 0);
+    for (int t = 0; t < total_nodes; t++)
+        row_ptr[t + 1] = row_ptr[t] + in_degree[t];
+
+    // Total number of edges
+    int total_edges = row_ptr[total_nodes];
+    col.resize(total_edges);
+
+    // Step 3: Fill col[] using a cursor to track positions
+    vector<int> cursor(row_ptr.begin(), row_ptr.end());
+
+    for (int i = 0; i < (int)edge_list.size(); i++)
+    {
+        int s = edge_list[i][0];   // source
+        int t = edge_list[i][1];   // destination
+
+        // Place source node into destination's neighbor list
+        col[cursor[t]++] = s;
+    }
+
+    // Free edge_list memory (no longer needed after CSR build)
+    edge_list.clear();
+    edge_list.shrink_to_fit();
 }
 
+
+// Compute fraction of nodes having opinion = 1
 double calculate_fraction_of_ones()
 {
-   int count = 0;
-
-   for(int i = 0; i<total_nodes; i++)
-   {
-        if(opinions[i] == 1)
+    int count = 0;
+    for (int i = 0; i < total_nodes; i++)
+        if (opinions[i] == 1)
             count++;
-   }
 
-   return (double)count / total_nodes;
+    return (double)count / total_nodes;
 }
 
-// For a given node, count majority opinion among its neighbours. Tie -> 0.
+
+// For a given node, compute majority opinion among its in-neighbors
+// If tie, return 0
 int get_majority_friend_opinions(int node)
 {
-    int zero_count = 0;
-    int one_count = 0;
-    for(int j = 0; j<total_nodes; j++)
-    {
-        if(adj[j][node] == 1)
-        {
-            if(opinions[j] == 0)
-                zero_count++;
-            else
-                one_count++;
-        }
-    }
-    
-    if(one_count>zero_count)
-        return 1;
+    int count_one  = 0;
+    int count_zero = 0;
 
+    // Traverse in-neighbors using CSR
+    for (int idx = row_ptr[node]; idx < row_ptr[node + 1]; idx++)
+    {
+        int neighbor = col[idx];
+
+        if (opinions[neighbor] == 1)
+            count_one++;
+        else
+            count_zero++;
+    }
+
+    // Return majority (default tie → 0)
+    if (count_one > count_zero) return 1;
     return 0;
 }
 
-// Calculate new opinions for all voters and return if anyone's opinion changed
+
+// Update all node opinions simultaneously (synchronous update)
+// Returns true if any opinion changed
 bool update_opinions()
 {
+    vector<int> new_opinions(total_nodes);
+
+    // Compute next state based on current state
+    for (int i = 0; i < total_nodes; i++)
+        new_opinions[i] = get_majority_friend_opinions(i);
+
+    // Apply updates and check if anything changed
     bool changed = false;
-
-    vector<int> new_opinions = opinions;
-
-    for(int i = 0; i<total_nodes; i++)
+    for (int i = 0; i < total_nodes; i++)
     {
-        int majority = get_majority_friend_opinions(i);
-
-        if(majority != opinions[i])
+        if (new_opinions[i] != opinions[i])
             changed = true;
 
-            new_opinions[i] = majority;
+        opinions[i] = new_opinions[i];
     }
-
-    opinions = new_opinions;
 
     return changed;
 }
 
-int main() {
-    // no preallocation; vectors grow on demand
 
-    // Read input files
-    read_opinions("opinions.txt"); 
+int main()
+{
+    // Step 1: Read input data
+    read_opinions("opinions.txt");
     read_edges("edge_list.txt");
 
-    // convert edge list into adjacency matrix once we know total_nodes
+    // Step 2: Convert edge list to CSR format
     build_adj_matrix();
-    
+
     cout << "Total nodes: " << total_nodes << endl;
-    
-    // Run simulation
-    int max_iterations = 30;
-    int iteration = 0;
-    bool opinions_changed = true;
-    
+
+    // Simulation parameters
+    int  max_iterations    = 30;
+    int  iteration         = 0;
+    bool opinions_changed  = true;
+
     // Print initial state
-    cout << "Iteration " << iteration << ": fraction of 1's = " 
+    cout << "Iteration " << iteration << ": fraction of 1's = "
          << calculate_fraction_of_ones() << endl;
-    
-    /// (6)  //////////////////////////////////////////////
-    while(iteration < max_iterations && update_opinions())
+
+    // Step 3: Iteratively update opinions
+    while (opinions_changed && iteration < max_iterations)
     {
+        opinions_changed = update_opinions();
         iteration++;
-        cout<< "Iteration " << iteration << ": fraction of 1's = " << calculate_fraction_of_ones() << endl;
+
+        double fraction = calculate_fraction_of_ones();
+
+        // Early stopping conditions:
+        // - No changes
+        // - Full consensus (all 0s or all 1s)
+        if (!opinions_changed || fraction == 0.0 || fraction == 1.0)
+            break;
+
+        cout << "Iteration " << iteration << ": fraction of 1's = "
+             << fraction << endl;
     }
 
-    ////////////////////////////////////////////////////////
-    // Print final result
+    // Final result
     double final_fraction = calculate_fraction_of_ones();
-    cout << "Iteration " << iteration << ": fraction of 1's = " 
+
+    cout << "Iteration " << iteration << ": fraction of 1's = "
          << final_fraction << endl;
-    
-    if(final_fraction == 1.0)
+
+    if      (final_fraction == 1.0)
         cout << "Consensus reached: all 1's" << endl;
-    else if(final_fraction == 0.0)
+    else if (final_fraction == 0.0)
         cout << "Consensus reached: all 0's" << endl;
     else
         cout << "No consensus reached after " << iteration << " iterations" << endl;
-    
+
     return 0;
 }
 
 
-/*********** Functions to read files **************************/ 
+/*********** File Reading Functions **************************/
 
-// Read opinion vector from file.
+// Reads opinions file: each line = (node_id, opinion)
 void read_opinions(string filename)
 {
     ifstream file(filename);
+
     int id, opinion;
-    while(file >> id >> opinion)
+    while (file >> id >> opinion)
     {
         opinions.push_back(opinion);
-        if(id >= total_nodes) total_nodes = id+1;
+
+        // Track maximum node ID
+        if (id >= total_nodes)
+            total_nodes = id + 1;
     }
+
     file.close();
 }
 
-// Read edge list from file and update total nodes as needed.
+
+// Reads edge list: each line = (source, destination)
 void read_edges(string filename)
 {
     ifstream file(filename);
-    int source, target;
-    
-    while(file >> source >> target)
+
+    int s, t;
+    while (file >> s >> t)
     {
-        edge_list.push_back({source, target});
-        if(source >= total_nodes) total_nodes = source+1;
-        if(target >= total_nodes) total_nodes = target+1;
+        edge_list.push_back({s, t});
+
+        // Update total_nodes based on max ID seen
+        if (s >= total_nodes) total_nodes = s + 1;
+        if (t >= total_nodes) total_nodes = t + 1;
     }
+
     file.close();
 }
-
-/********************************************************************** */
+/**********************************************************************/
